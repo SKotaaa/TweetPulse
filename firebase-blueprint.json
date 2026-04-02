@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Unique user ID" },
+        "name": { "type": "string", "description": "User's full name" },
+        "username": { "type": "string", "description": "User's unique identifier" },
+        "email": { "type": "string", "description": "User's email address" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account creation timestamp" }
+      },
+      "required": ["uid", "name", "username", "email", "createdAt"]
+    },
+    "Analysis": {
+      "title": "Analysis",
+      "description": "Sentiment analysis result for a keyword",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User ID of the owner" },
+        "keyword": { "type": "string", "description": "The analyzed keyword or hashtag" },
+        "sentiment": { "type": "string", "enum": ["positive", "negative", "neutral"], "description": "Overall sentiment" },
+        "summary": { "type": "string", "description": "AI-generated summary" },
+        "confidence": { "type": "number", "description": "Confidence score (0 to 1)" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "positive": { "type": "number" },
+            "negative": { "type": "number" },
+            "neutral": { "type": "number" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Analysis timestamp" }
+      },
+      "required": ["uid", "keyword", "sentiment", "summary", "confidence", "stats", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/history/{analysisId}": {
+      "schema": "Analysis",
+      "description": "Historical analysis results"
+    }
+  }
+}

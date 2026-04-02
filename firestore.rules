@@ -1,0 +1,118 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (uid)
+    // Fields:
+    //   - uid: string (required) - Unique user ID
+    //   - name: string (required) - User's full name
+    //   - username: string (required) - User's unique identifier
+    //   - email: string (required) - User's email address
+    //   - createdAt: timestamp (required) - Account creation timestamp
+    //
+    // Collection: history
+    // Document ID: analysisId (auto-generated)
+    // Fields:
+    //   - userId: string (required) - User ID of the owner
+    //   - text: string (required) - The analyzed keyword or hashtag
+    //   - sentiment: string (required, enum: ['positive', 'negative', 'neutral']) - Overall sentiment
+    //   - summary: string (required) - AI-generated summary
+    //   - confidence: number (required, 0 to 1) - Confidence score
+    //   - stats: map (required) - { positive: number, negative: number, neutral: number }
+    //   - topics: list (optional) - List of topics
+    //   - createdAt: timestamp (required) - Analysis timestamp
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasOnly(['uid', 'username', 'email', 'createdAt', 'role', 'firstName', 'lastName', 'updatedAt']) &&
+             data.uid is string && data.uid.size() > 0 &&
+             data.username is string && data.username.size() >= 3 && data.username.size() < 30 &&
+             isValidEmail(data.email) &&
+             data.createdAt is timestamp &&
+             data.role in ['user', 'admin'];
+    }
+
+    function isValidAnalysis(data) {
+      return data.keys().hasOnly(['userId', 'text', 'sentiment', 'summary', 'confidence', 'stats', 'topics', 'createdAt']) &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 500 &&
+             data.sentiment in ['positive', 'negative', 'neutral'] &&
+             data.summary is string && data.summary.size() > 0 && data.summary.size() < 5000 &&
+             data.confidence is number && data.confidence >= 0 && data.confidence <= 1 &&
+             data.stats is map && data.stats.keys().hasOnly(['positive', 'negative', 'neutral']) &&
+             data.stats.positive is number && data.stats.negative is number && data.stats.neutral is number &&
+             data.topics is list && data.topics.size() <= 10 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidChatMessage(data) {
+      return data.keys().hasOnly(['role', 'content', 'createdAt']) &&
+             data.role in ['user', 'model'] &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 10000 &&
+             data.createdAt is timestamp;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "spkotaaa@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && uidNotModified();
+      allow delete: if isAdmin();
+    }
+
+    match /users/{userId}/history/{analysisId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidAnalysis(request.resource.data);
+      allow update: if false; // History should be immutable
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+
+    match /users/{userId}/chat_history/{messageId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidChatMessage(request.resource.data);
+      allow update: if false; // Chat history should be immutable
+      allow delete: if isOwner(userId) || isAdmin();
+    }
+  }
+}
