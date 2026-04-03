@@ -119,7 +119,7 @@ export const analyzeSentiment = async (
   const id = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
-    // 1. CALL BACKEND PROXY (Hides AI keys and standardizes response)
+    // 1. CALL SERVERLESS HANDLER
     const response = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -131,22 +131,11 @@ export const analyzeSentiment = async (
 
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-    // 2. SAFE PARSING (text first, then try decode)
-    const rawText = await response.text();
-    if (isDev()) console.log(`PULSE AI [PROXY] RAW:`, rawText);
+    const result = await response.json();
+    if (isDev()) console.log(`PULSE AI [SERVERLESS] SUCCESS:`, result);
     
-    if (!rawText) throw new Error("Empty response from Proxy");
-
-    let result;
-    try {
-      result = JSON.parse(rawText);
-    } catch {
-      throw new Error("Proxy returned invalid JSON");
-    }
-
-    // 3. QUALITY VALIDATION (Strict quality checks)
+    // 3. QUALITY VALIDATION & NORMALIZATION
     if (validateSentimentResponse(result)) {
-      if (isDev()) console.log(`PULSE AI [PROXY] FINAL SUCCESS:`, result);
       return normalizeSentimentData(result);
     } else {
       throw new Error("Quality validation failed (low-quality or malformed response)");
