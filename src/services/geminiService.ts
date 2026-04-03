@@ -10,24 +10,212 @@ export interface SentimentAnalysisResponse {
   topics: string[];
 }
 
-export const analyzeSentiment = async (keyword: string): Promise<SentimentAnalysisResponse> => {
+export interface ChatResponse {
+  content: string;
+}
+
+// --- CONSTANTS & FALLBACKS ---
+
+export const SENTIMENT_FALLBACK: SentimentAnalysisResponse = {
+  sentiment: 'neutral',
+  summary: 'Unable to analyze at the moment',
+  confidence: 0,
+  stats: { positive: 0, negative: 0, neutral: 100 },
+  topics: []
+};
+
+export const CHAT_FALLBACK: ChatResponse = {
+  content: "AI service temporarily unavailable. Please try again shortly."
+};
+
+const TIMEOUT_MS = 10000; // 10s hard timeout
+
+// --- HELPERS ---
+
+const isDev = () => import.meta.env.DEV;
+
+const cleanAIJSON = (text: string): string => {
+  if (!text) return "";
+  
+  // 1. Remove markdown blocks if present
+  let cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+  
+  // 2. Extract the first { ... } block if there's extra text
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    cleaned = jsonMatch[0];
+  }
+
+  // 3. Completeness check: Ensure it looks like a full object
+  if (!cleaned.startsWith("{") || !cleaned.endsWith("}")) {
+    if (isDev()) console.warn("PULSE: Truncated or malformed JSON detected.");
+    return "";
+  }
+
+  return cleaned;
+};
+
+const validateSentimentResponse = (data: any): data is SentimentAnalysisResponse => {
+  if (!data || typeof data !== 'object') return false;
+  
+  // Basic property and type checks
+  const hasSentiment = ['positive', 'negative', 'neutral'].includes(data.sentiment);
+  const hasStats = data.stats && 
+                   typeof data.stats.positive === 'number' &&
+                   typeof data.stats.negative === 'number' &&
+                   typeof data.stats.neutral === 'number';
+  const hasSummary = typeof data.summary === 'string' && data.summary.trim().length >= 5;
+  const hasConfidence = typeof data.confidence === 'number' && data.confidence >= 0;
+  const hasTopics = Array.isArray(data.topics);
+
+  if (isDev() && !(hasSentiment && hasStats && hasSummary && hasConfidence && hasTopics)) {
+    console.warn("PULSE: Quality validation failed.", {
+      hasSentiment, hasStats, hasSummary, hasConfidence, hasTopics,
+      data
+    });
+  }
+
+  return !!(hasSentiment && hasStats && hasSummary && hasConfidence && hasTopics);
+};
+
+
+const normalizeSentimentData = (data: SentimentAnalysisResponse): SentimentAnalysisResponse => {
+  // Ensure confidence is 0-100
+  let confidence = data.confidence;
+  if (confidence <= 1) confidence *= 100; // Handle 0.85 -> 85
+  confidence = Math.min(100, Math.max(0, Math.round(confidence)));
+
+  // Ensure stats sum to 100
+  const stats = { ...data.stats };
+  const total = stats.positive + stats.negative + stats.neutral;
+  
+  if (total === 0) {
+    stats.neutral = 100;
+  } else if (Math.abs(total - 100) > 0.1) {
+    stats.positive = Math.round((stats.positive / total) * 100);
+    stats.negative = Math.round((stats.negative / total) * 100);
+    stats.neutral = 100 - (stats.positive + stats.negative);
+  }
+
+  return {
+    ...data,
+    confidence,
+    stats,
+    topics: data.topics.slice(0, 5) // Limit topics
+  };
+};
+
+// --- CORE FUNCTIONS ---
+
+/**
+ * Robust sentiment analysis with 10s timeout, retries, and mandatory fallback.
+ * Migrated to Backend Proxy (/api/analyze) for stability and security.
+ */
+export const analyzeSentiment = async (
+  keyword: string,
+  isRetry = false
+): Promise<SentimentAnalysisResponse> => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
   try {
+    // 1. CALL BACKEND PROXY (Hides AI keys and standardizes response)
     const response = await fetch("/api/analyze", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ keyword }),
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({ keyword })
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || `Server error: ${response.status}`);
+    clearTimeout(id);
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    // 2. SAFE PARSING (text first, then try decode)
+    const rawText = await response.text();
+    if (isDev()) console.log(`PULSE AI [PROXY] RAW:`, rawText);
+    
+    if (!rawText) throw new Error("Empty response from Proxy");
+
+    let result;
+    try {
+      result = JSON.parse(rawText);
+    } catch {
+      throw new Error("Proxy returned invalid JSON");
     }
 
-    return await response.json();
+    // 3. QUALITY VALIDATION (Strict quality checks)
+    if (validateSentimentResponse(result)) {
+      if (isDev()) console.log(`PULSE AI [PROXY] FINAL SUCCESS:`, result);
+      return normalizeSentimentData(result);
+    } else {
+      throw new Error("Quality validation failed (low-quality or malformed response)");
+    }
+
   } catch (error: any) {
-    console.error('Sentiment Analysis Error:', error);
-    throw new Error(error.message || 'Failed to analyze sentiment');
+    clearTimeout(id);
+    
+    const errorMsg = error.name === 'AbortError' ? 'Request timed out (>10s)' : error.message;
+
+    if (isDev()) {
+      console.warn(`PULSE AI [PROXY] FAIL${isRetry ? ' (Retry)' : ''}: ${errorMsg}`);
+    }
+
+    // SMART RETRY: Perform exactly ONE retry on failure before falling back.
+    if (!isRetry) {
+      if (isDev()) console.info("PULSE: Triggering automatic recovery retry...");
+      return analyzeSentiment(keyword, true);
+    }
+
+    // FINAL FALLBACK: Only reached if initial + retry both fail.
+    return SENTIMENT_FALLBACK;
+  }
+};
+
+
+
+/**
+ * Robust chat response with 10s timeout and mandatory fallback.
+ * Logic centralized from PulseAI component.
+ */
+export const fetchPulseAIResponse = async (
+  messages: { role: string; content: string }[]
+): Promise<ChatResponse> => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    // Calling the local proxy endpoint
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({ messages })
+    });
+
+    clearTimeout(id);
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const rawText = await response.text();
+    if (!rawText) throw new Error("Empty response");
+
+    const data = JSON.parse(rawText);
+    const content = data?.content;
+
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new Error("Malformed chat response");
+    }
+
+    return { content: content.trim() };
+
+  } catch (error: any) {
+    clearTimeout(id);
+    
+    if (isDev()) {
+      console.error("PULSE: fetchPulseAIResponse failed:", error.message);
+    }
+
+    return CHAT_FALLBACK;
   }
 };

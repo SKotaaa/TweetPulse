@@ -102,7 +102,6 @@ export default function PulseAI() {
       { role: 'user', content: userMessage, id: 'user-' + Date.now() }
     ]);
 
-    console.log("PULSE AI: Starting optimized request for:", userMessage);
     const startTime = Date.now();
 
     try {
@@ -113,34 +112,24 @@ export default function PulseAI() {
         role: 'user',
         content: userMessage,
         createdAt: serverTimestamp()
-      }).catch(e => console.warn("Background save failed:", e));
+      }).catch(e => console.warn("PULSE: Background save failed:", e));
 
-      // 3. Backend API Call
-      let aiResponse = "";
-      try {
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            messages: [
-              ...messages.slice(-3).map(m => ({
-                role: m.role === 'model' ? 'assistant' : 'user',
-                content: m.content
-              })),
-              { role: "user", content: userMessage }
-            ]
-          })
-        });
+      // 3. Centralized API Call (Centralized logic handles timeout, safety, and errors)
+      const chatMessages = [
+        ...messages.slice(-3).map(m => ({
+          role: m.role === 'model' ? 'assistant' : 'user',
+          content: m.content
+        })),
+        { role: "user", content: userMessage }
+      ];
 
-        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+      const { fetchPulseAIResponse, CHAT_FALLBACK } = await import('../services/geminiService');
+      const response = await fetchPulseAIResponse(chatMessages);
+      const aiResponse = response.content;
 
-        const data = await response.json();
-        aiResponse = data.content;
-      } catch (apiErr: any) {
-        console.warn("Pulse AI Backend Error, using fallback:", apiErr.message);
-        aiResponse = getLocalFallback(userMessage);
+      // 4. Update UI Error if it's the fallback (Optional diagnostic)
+      if (aiResponse === CHAT_FALLBACK.content) {
+        console.warn("PULSE: Received fallback response from AI service.");
       }
 
       // 5. Cache it
@@ -159,18 +148,21 @@ export default function PulseAI() {
         role: 'model',
         content: aiResponse,
         createdAt: serverTimestamp()
-      }).catch(e => console.warn("Background AI save failed:", e));
+      }).catch(e => console.warn("PULSE: Background AI save failed:", e));
 
     } catch (err: any) {
-      console.error("CRITICAL AI ERROR:", err);
-      const fallback = getLocalFallback(userMessage);
+      console.error("PULSE: CRITICAL AI UI ERROR:", err);
+      // Even if the centralized service fails unexpectedly, we provide a final UI-tier fallback
+      const finalFallback = getLocalFallback(userMessage);
       setMessages(prev => [
         ...prev,
-        { role: 'model', content: fallback, id: 'err-' + Date.now() }
+        { role: 'model', content: finalFallback, id: 'err-' + Date.now() }
       ]);
     } finally {
       setLoading(false);
-      console.log(`PULSE AI: Total cycle time: ${Date.now() - startTime}ms`);
+      if (import.meta.env.DEV) {
+        console.log(`PULSE: Total cycle time: ${Date.now() - startTime}ms`);
+      }
     }
   };
 
