@@ -48,11 +48,15 @@ export default function Analyze() {
       }
 
       setResult({
-        score: formatConfidence(data.confidence),
-        label: data.sentiment.toUpperCase(),
-        summary: data.summary,
-        stats: data.stats,
-        topics: data.topics || []
+        score: formatConfidence(data?.confidence || 0),
+        label: data?.sentiment?.toUpperCase() || 'NEUTRAL',
+        summary: data?.summary || "No detailed explanation available.",
+        stats: {
+          positive: data?.stats?.positive || 0,
+          negative: data?.stats?.negative || 0,
+          neutral: data?.stats?.neutral || 0
+        },
+        topics: data?.topics || []
       });
       
       setLoading(false);
@@ -64,15 +68,15 @@ export default function Analyze() {
       const analysisData = {
         userId: currentUid,
         text: query,
-        sentiment: data.sentiment.toLowerCase(),
-        summary: data.summary,
-        confidence: data.confidence,
+        sentiment: data?.sentiment?.toLowerCase() || 'neutral',
+        summary: data?.summary || "No detailed explanation available.",
+        confidence: data?.confidence || 0,
         stats: {
-          positive: data.stats.positive || 0,
-          negative: data.stats.negative || 0,
-          neutral: data.stats.neutral || 0
+          positive: data?.stats?.positive || 0,
+          negative: data?.stats?.negative || 0,
+          neutral: data?.stats?.neutral || 0
         },
-        topics: data.topics || [],
+        topics: data?.topics || [],
         createdAt: serverTimestamp()
       };
 

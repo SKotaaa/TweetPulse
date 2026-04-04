@@ -25,7 +25,7 @@ export const SENTIMENT_FALLBACK: SentimentAnalysisResponse = {
 };
 
 export const CHAT_FALLBACK: ChatResponse = {
-  content: "AI service temporarily unavailable. Please try again shortly."
+  content: "Something went wrong. Please try again."
 };
 
 const TIMEOUT_MS = 10000; // 10s hard timeout
@@ -156,8 +156,12 @@ export const analyzeSentiment = async (
       return analyzeSentiment(keyword, true);
     }
 
-    // FINAL FALLBACK: Only reached if initial + retry both fail.
-    return SENTIMENT_FALLBACK;
+    // FINAL FALLBACK: Only reached if everything above fails.
+    console.error(`PULSE AI [RECOVERY]: Using absolute fallback for "${keyword}"`);
+    return {
+      ...SENTIMENT_FALLBACK,
+      summary: `Analysis for "${keyword.substring(0, 30)}..." is temporarily limited. Stability mode active.`
+    };
   }
 };
 
@@ -184,19 +188,27 @@ export const fetchPulseAIResponse = async (
 
     clearTimeout(id);
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
+    // Always read as text first so a non-JSON body doesn't throw unhandled
     const rawText = await response.text();
-    if (!rawText) throw new Error("Empty response");
-
-    const data = JSON.parse(rawText);
-    const content = data?.content;
-
-    if (typeof content !== 'string' || !content.trim()) {
-      throw new Error("Malformed chat response");
+    if (!rawText || !rawText.trim()) {
+      throw new Error("Empty response body");
     }
 
-    return { content: content.trim() };
+    let data: any;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      throw new Error("Response is not valid JSON");
+    }
+
+    // Accept both the new { reply } shape and old { content } shape for compatibility
+    const reply = data?.reply ?? data?.content;
+
+    if (typeof reply !== 'string' || !reply.trim()) {
+      throw new Error("reply field is missing or empty");
+    }
+
+    return { content: reply.trim() };
 
   } catch (error: any) {
     clearTimeout(id);

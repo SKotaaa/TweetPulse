@@ -3,7 +3,7 @@ import { collection, query, orderBy, onSnapshot, doc, deleteDoc, limit as fsLimi
 import { db, handleFirestoreError, OperationType, AnalysisResult } from '../firebase';
 import { useAuth } from '../App';
 import Card from '../components/Card';
-import { Calendar, Search, AlertCircle, Trash2, Share2, CheckCircle2 } from 'lucide-react';
+import { Calendar, Search, AlertCircle, Trash2, Share2, CheckCircle2, Download } from 'lucide-react';
 import { TableSkeleton } from '../components/Skeleton';
 import { throttle, CACHE_KEYS, CACHE_MAX_AGE, CACHE_VERSION, CACHE_SIZE_LIMIT } from '../utils/performance';
 import { formatConfidence } from '../utils/formatters';
@@ -126,11 +126,156 @@ export default function History() {
   };
 
   const handleShare = (item: any) => {
-    const text = `Pulse Report: ${item.text}\nSentiment: ${item.sentiment.toUpperCase()}\nConfidence: ${formatConfidence(item.confidence)}%`;
+    const safeSummary = item?.summary || 'No detailed explanation available.';
+    const safeTopics = Array.isArray(item?.topics) && item.topics.length > 0 ? item.topics.join(', ') : 'None';
+    
+    const text = `TweetPulse Analysis:
+Query: ${item?.text || ''}
+Sentiment: ${(item?.sentiment || 'unknown').toUpperCase()} (${formatConfidence(item?.confidence || 0)}%)
+Reason: ${safeSummary}
+Topics: ${safeTopics}`;
+
     navigator.clipboard.writeText(text).then(() => {
       setSuccess('Report copied!');
       setTimeout(() => setSuccess(''), 3000);
+    }).catch(() => {
+      setError('Failed to copy report.');
     });
+  };
+
+  const exportCSV = () => {
+    try {
+      if (!history || history.length === 0) return;
+      
+      const escape = (str: any) => {
+        if (!str) return '""';
+        const s = String(str).replace(/"/g, '""');
+        return `"${s}"`;
+      };
+      
+      const headers = ['Keyword', 'Sentiment', 'Confidence', 'Summary', 'Topics', 'Date'];
+      const rows = history.map(item => [
+        escape(item?.text),
+        escape(item?.sentiment || 'neutral'),
+        escape(item?.confidence || 0),
+        escape(item?.summary || 'No detailed explanation available.'),
+        escape(Array.isArray(item?.topics) ? item.topics.join(', ') : ''),
+        escape(formatDate(item?.createdAt))
+      ]);
+      
+      const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+      
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', 'tweetpulse-history.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Export CSV Failed:', e);
+      setError('Failed to export CSV.');
+    }
+  };
+
+  const exportPDF = () => {
+    try {
+      if (!history || history.length === 0) return;
+
+      const sentimentColor = (s: string) => {
+        if (s === 'positive') return '#059669';
+        if (s === 'negative') return '#dc2626';
+        return '#6b7280';
+      };
+      const sentimentBg = (s: string) => {
+        if (s === 'positive') return '#d1fae5';
+        if (s === 'negative') return '#fee2e2';
+        return '#f3f4f6';
+      };
+
+      const rows = filteredHistory.map((item, i) => {
+        const sentiment = item?.sentiment || 'neutral';
+        const confidence = formatConfidence(item?.confidence || 0);
+        const summary = item?.summary || 'No detailed explanation available.';
+        const topics = Array.isArray(item?.topics) && item.topics.length > 0
+          ? item.topics.map((t: string) => `<span style="display:inline-block;background:#e0e7ff;color:#3730a3;border-radius:999px;padding:2px 10px;font-size:11px;margin:2px;font-weight:600">${t}</span>`).join(' ')
+          : '<span style="color:#9ca3af;font-size:12px">No topics detected</span>';
+
+        return `
+          <div style="page-break-inside:avoid;margin-bottom:28px;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,0.06)">
+            <div style="background:#f9fafb;padding:14px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span style="font-size:11px;font-weight:700;color:#9ca3af;letter-spacing:0.08em">#${i + 1}</span>
+                <span style="font-size:17px;font-weight:700;color:#111827">${item?.text || ''}</span>
+              </div>
+              <span style="background:${sentimentBg(sentiment)};color:${sentimentColor(sentiment)};padding:3px 14px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase">${sentiment}</span>
+            </div>
+            <div style="padding:16px 20px">
+              <div style="display:flex;gap:24px;margin-bottom:12px">
+                <div><span style="font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:0.08em;text-transform:uppercase">Confidence</span><br/><span style="font-size:15px;font-weight:700;color:#111827">${confidence}%</span></div>
+                <div><span style="font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:0.08em;text-transform:uppercase">Date</span><br/><span style="font-size:15px;font-weight:700;color:#111827">${formatDate(item?.createdAt)}</span></div>
+              </div>
+              <div style="background:#f0f9ff;border-left:3px solid #3b82f6;border-radius:0 8px 8px 0;padding:10px 14px;margin-bottom:12px">
+                <span style="font-size:10px;font-weight:700;color:#3b82f6;letter-spacing:0.08em;text-transform:uppercase;display:block;margin-bottom:4px">AI Explanation</span>
+                <span style="font-size:13px;color:#1e40af;line-height:1.6">${summary}</span>
+              </div>
+              <div>
+                <span style="font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:0.08em;text-transform:uppercase;display:block;margin-bottom:6px">Topics</span>
+                ${topics}
+              </div>
+            </div>
+          </div>`;
+      }).join('');
+
+      const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>TweetPulse History Report</title>
+  <style>
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 0; background: #fff; color: #111827; }
+    .page { max-width: 760px; margin: 0 auto; padding: 40px 32px; }
+    .header { text-align: center; margin-bottom: 40px; border-bottom: 2px solid #e5e7eb; padding-bottom: 28px; }
+    .header h1 { font-size: 28px; font-weight: 800; color: #111827; margin: 0 0 6px; letter-spacing: -0.02em; }
+    .header p { color: #6b7280; font-size: 13px; margin: 0; }
+    .meta { display: flex; justify-content: center; gap: 24px; margin-top: 16px; }
+    .meta span { font-size: 12px; font-weight: 600; color: #6b7280; }
+    .meta strong { color: #111827; }
+    .footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 12px; }
+  </style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <h1>TweetPulse History Report</h1>
+    <p>Sentiment Analysis Report — Generated ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+    <div class="meta">
+      <span>Total Analyses: <strong>${filteredHistory.length}</strong></span>
+      <span>Positive: <strong>${filteredHistory.filter(i => i.sentiment === 'positive').length}</strong></span>
+      <span>Negative: <strong>${filteredHistory.filter(i => i.sentiment === 'negative').length}</strong></span>
+      <span>Neutral: <strong>${filteredHistory.filter(i => i.sentiment === 'neutral').length}</strong></span>
+    </div>
+  </div>
+  ${rows}
+  <div class="footer">Generated by TweetPulse Sentiment Intelligence &mdash; ${new Date().toISOString()}</div>
+</div>
+<script>window.onload = () => { window.print(); }<\/script>
+</body>
+</html>`;
+
+      const win = window.open('', '_blank');
+      if (!win) { setError('Popup blocked. Please allow popups for this site.'); return; }
+      win.document.write(html);
+      win.document.close();
+    } catch (e) {
+      console.error('Export PDF Failed:', e);
+      setError('Failed to export PDF.');
+    }
   };
 
   const filteredHistory = useMemo(() => {
@@ -207,6 +352,22 @@ export default function History() {
               <span className="text-gray-400">-</span>
               <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-xs" />
             </div>
+            {history.length > 0 && (
+              <div className="flex items-center gap-2 ml-4 border-l border-gray-200 dark:border-gray-700 pl-4">
+                <button
+                  onClick={exportCSV}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:border-blue-500 hover:text-blue-600 rounded-lg text-xs font-semibold text-gray-600 dark:text-gray-300 transition-colors"
+                >
+                  <Download size={14} /> CSV
+                </button>
+                <button
+                  onClick={exportPDF}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:border-red-500 hover:text-red-600 rounded-lg text-xs font-semibold text-gray-600 dark:text-gray-300 transition-colors"
+                >
+                  <Download size={14} /> PDF
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
